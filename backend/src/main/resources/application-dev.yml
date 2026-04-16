@@ -1,0 +1,41 @@
+spring:
+  datasource:
+    url: jdbc:mysql://122.51.138.179:3306/power_guard?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: power_guard
+    password: power_guard
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  data:
+    redis:
+      host: 122.51.138.179
+      port: 6379
+      database: 0
+      password: redis
+      connect-timeout: 5s
+      timeout: 30s
+  mail:
+    host: smtp.qq.com
+    port: 587
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+            required: true
+          connectiontimeout: 5000
+          timeout: 5000
+          writetimeout: 5000
+
+external-electricity:
+  url: http://tysf.ahpu.edu.cn:8063/web/Common/Tsm.html
+  aid: 0030000000002501
+  fixed-account: 54963
+  user-agent: Mozilla/5.0 (Linux; Android 16; RMX3820 Build/BP2A.250605.015; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/146.0.7680.120 Mobile Safari/537.36
+  accept: application/json, text/javascript, */*; q=0.01
+  accept-encoding: gzip, deflate
+  accept-language: zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7
+  origin: http://tysf.ahpu.edu.cn:8063
+  referer: http://tysf.ahpu.edu.cn:8063/web/common/checkEle.html?ticket=29261EA82C644BB095689D3743B9CCCB&from=ehall&cometype=&timestamp=20260413115218302
+  cookie: JSESSIONID=E63263DC26E403453DAC255B47CACE22
+  area: 安徽工程大学
+  timeout-millis: 8000

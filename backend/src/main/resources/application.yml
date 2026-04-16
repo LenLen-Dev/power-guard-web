@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: power-guard-backend
+  profiles:
+    active: dev
+
+server:
+  port: 8022
+
+mybatis:
+  mapper-locations: classpath*:mapper/*.xml
+  type-aliases-package: com.scorpio.powerguard.entity
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
+logging:
+  level:
+    com.scorpio.powerguard: INFO
+
+mail-consumer:
+  queue-key: power:mail:queue
+  dead-letter-key: power:mail:dead-letter
+  sender-count-key-prefix: power:mail:sender:count
+  max-daily-send-count: 100
+  max-retry-count: 3
+  idle-wait-millis: 2000

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.scorpio.powerguard.mapper.ElectricityRecordMapper">
+
+    <resultMap id="ElectricityRecordResultMap" type="com.scorpio.powerguard.entity.ElectricityRecord">
+        <id property="id" column="id"/>
+        <result property="roomId" column="room_id"/>
+        <result property="remainSnapshot" column="remain_snapshot"/>
+        <result property="fetchTime" column="fetch_time"/>
+    </resultMap>
+
+    <insert id="insert" parameterType="com.scorpio.powerguard.entity.ElectricityRecord" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO electricity_record (room_id, remain_snapshot, fetch_time)
+        VALUES (#{roomId}, #{remainSnapshot}, #{fetchTime})
+    </insert>
+
+    <delete id="deleteByRoomId">
+        DELETE FROM electricity_record
+        WHERE room_id = #{roomId}
+    </delete>
+
+    <select id="selectNearestSnapshot" resultMap="ElectricityRecordResultMap">
+        SELECT id, room_id, remain_snapshot, fetch_time
+        FROM electricity_record
+        WHERE room_id = #{roomId}
+          AND fetch_time BETWEEN #{startTime} AND #{endTime}
+        ORDER BY ABS(TIMESTAMPDIFF(SECOND, fetch_time, #{targetTime})) ASC, fetch_time ASC
+        LIMIT 1
+    </select>
+</mapper>

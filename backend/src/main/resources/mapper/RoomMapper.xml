@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.scorpio.powerguard.mapper.RoomMapper">
+
+    <resultMap id="RoomResultMap" type="com.scorpio.powerguard.entity.Room">
+        <id property="id" column="id"/>
+        <result property="buildingId" column="building_id"/>
+        <result property="buildingName" column="building_name"/>
+        <result property="roomId" column="room_id"/>
+        <result property="roomName" column="room_name"/>
+        <result property="alertEmail" column="alert_email"/>
+        <result property="threshold" column="threshold"/>
+        <result property="total" column="total"/>
+        <result property="remain" column="remain"/>
+        <result property="status" column="status"/>
+        <result property="deleted" column="deleted"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+
+    <sql id="BaseColumns">
+        id, building_id, building_name, room_id, room_name, alert_email, threshold,
+        total, remain, status, deleted, update_time
+    </sql>
+
+    <insert id="insert" parameterType="com.scorpio.powerguard.entity.Room" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO room (
+            building_id, building_name, room_id, room_name, alert_email, threshold,
+            total, remain, status, deleted, update_time
+        ) VALUES (
+            #{buildingId}, #{buildingName}, #{roomId}, #{roomName}, #{alertEmail}, #{threshold},
+            #{total}, #{remain}, #{status}, #{deleted}, #{updateTime}
+        )
+    </insert>
+
+    <update id="updateBasicInfo" parameterType="com.scorpio.powerguard.entity.Room">
+        UPDATE room
+        SET building_id = #{buildingId},
+            building_name = #{buildingName},
+            room_id = #{roomId},
+            room_name = #{roomName},
+            alert_email = #{alertEmail},
+            threshold = #{threshold},
+            status = #{status},
+            update_time = #{updateTime}
+        WHERE id = #{id}
+          AND deleted = 0
+    </update>
+
+    <update id="updateElectricityData">
+        UPDATE room
+        SET total = #{total},
+            remain = #{remain},
+            status = #{status},
+            update_time = #{updateTime}
+        WHERE id = #{id}
+          AND deleted = 0
+    </update>
+
+    <select id="selectById" resultMap="RoomResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM room
+        WHERE id = #{id}
+          AND deleted = 0
+    </select>
+
+    <select id="selectByIdIncludingDeleted" resultMap="RoomResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM room
+        WHERE id = #{id}
+    </select>
+
+    <select id="selectAllActive" resultMap="RoomResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM room
+        WHERE deleted = 0
+    </select>
+
+    <select id="selectAllActiveOrderByRoom" resultMap="RoomResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM room
+        WHERE deleted = 0
+        ORDER BY status DESC, building_name ASC, room_name ASC
+    </select>
+
+    <select id="selectByBuildingAndRoom" resultMap="RoomResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM room
+        WHERE building_id = #{buildingId}
+          AND room_id = #{roomId}
+          AND deleted = 0
+        <if test="excludeId != null">
+            AND id != #{excludeId}
+        </if>
+        LIMIT 1
+    </select>
+
+    <delete id="deleteById">
+        DELETE FROM room
+        WHERE id = #{id}
+    </delete>
+</mapper>
