@@ -10,7 +10,32 @@ import { ApiError } from "./lib/api";
 import { buildRoomName } from "./lib/buildings";
 import { useRoomTrend } from "./hooks/useRoomTrend";
 import { formatNumber } from "./lib/format";
-import type { NoticeState, RoomEditorValues, RoomFormValues, RoomStatus } from "./lib/types";
+import type { NoticeState, RefreshJob, RoomEditorValues, RoomFormValues, RoomStatus } from "./lib/types";
+
+function isRefreshJobTerminal(refreshJob: RefreshJob | null) {
+  return refreshJob?.status === "SUCCESS" || refreshJob?.status === "PARTIAL_SUCCESS" || refreshJob?.status === "FAILED";
+}
+
+function describeRefreshJobStatus(refreshJob: RefreshJob) {
+  switch (refreshJob.status) {
+    case "QUEUED":
+      return "排队中";
+    case "RUNNING":
+      return "执行中";
+    case "SUCCESS":
+      return "已完成";
+    case "PARTIAL_SUCCESS":
+      return "部分完成";
+    case "FAILED":
+      return "已失败";
+    default:
+      return refreshJob.status;
+  }
+}
+
+function describeRefreshJobSource(refreshJob: RefreshJob) {
+  return refreshJob.source === "SCHEDULED" ? "统一查询任务" : "手动刷新任务";
+}
 
 function getNextScheduledFetchTime(now: Date) {
   const next = new Date(now);
@@ -47,6 +72,7 @@ function App() {
     setSelectedRoomId,
     loading,
     manualRefreshing,
+    refreshJob,
     refreshCooldownSeconds,
     submitting,
     error,
@@ -61,6 +87,7 @@ function App() {
   const [search, setSearch] = useState("");
   const [notice, setNotice] = useState<NoticeState | null>(null);
   const [scheduledRefreshSeconds, setScheduledRefreshSeconds] = useState(() => getSecondsUntilNextScheduledFetch(new Date()));
+  const [lastHandledRefreshJobId, setLastHandledRefreshJobId] = useState<string | null>(null);
 
   const deferredSearch = useDeferredValue(search);
   const selectedRoom = rooms.find((room) => room.id === selectedRoomId) ?? null;
@@ -85,6 +112,27 @@ function App() {
     const timer = window.setInterval(updateCountdown, 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (!refreshJob || !isRefreshJobTerminal(refreshJob) || lastHandledRefreshJobId === refreshJob.jobId) {
+      return;
+    }
+
+    if (refreshJob.source === "SCHEDULED") {
+      setLastHandledRefreshJobId(refreshJob.jobId);
+      return;
+    }
+
+    if (refreshJob.status === "SUCCESS") {
+      setNotice({ type: "success", message: refreshJob.message || "已完成一次全量电量查询" });
+    } else if (refreshJob.status === "PARTIAL_SUCCESS") {
+      setNotice({ type: "warning", message: refreshJob.message || "刷新已完成，但存在部分失败房间" });
+    } else {
+      setNotice({ type: "error", message: refreshJob.message || "刷新任务执行失败" });
+    }
+
+    setLastHandledRefreshJobId(refreshJob.jobId);
+  }, [lastHandledRefreshJobId, refreshJob]);
 
   const filteredRooms = rooms.filter((room) => {
     const keyword = deferredSearch.trim().toLowerCase();
@@ -160,8 +208,14 @@ function App() {
 
   const handleManualRefresh = async () => {
     try {
-      await triggerManualRefresh(selectedRoomId);
-      setNotice({ type: "success", message: "已执行一次全量电量查询" });
+      const nextJob = await triggerManualRefresh(selectedRoomId);
+      if (!nextJob) {
+        return;
+      }
+      setNotice({
+        type: nextJob.status === "QUEUED" ? "warning" : "success",
+        message: nextJob.status === "QUEUED" ? "刷新任务已提交，正在排队" : "刷新任务已提交，正在执行"
+      });
     } catch (requestError) {
       if (requestError instanceof ApiError && requestError.code === 429) {
         setNotice({ type: "warning", message: requestError.message });
@@ -192,7 +246,15 @@ function App() {
               disabled={manualRefreshing || refreshCooldownSeconds > 0}
             >
               <RefreshCcw className={`h-4 w-4 ${manualRefreshing ? "animate-spin" : ""}`} />
-              {manualRefreshing ? "刷新中..." : refreshCooldownSeconds > 0 ? `冷却中 ${refreshCooldownSeconds}s` : "自动刷新"}
+              {manualRefreshing
+                ? "提交中..."
+                : refreshJob?.status === "QUEUED"
+                  ? "排队中..."
+                  : refreshJob?.status === "RUNNING"
+                    ? `刷新中 ${refreshJob.completedRooms}/${Math.max(refreshJob.totalRooms, 1)}`
+                    : refreshCooldownSeconds > 0
+                      ? `冷却中 ${refreshCooldownSeconds}s`
+                      : "手动刷新"}
             </button>
             <button type="button" className="primary-btn gap-2" onClick={() => setCreateOpen(true)}>
               <Plus className="h-4 w-4" />
@@ -223,6 +285,36 @@ function App() {
             <AlertCircle className="h-4 w-4 shrink-0" />
             <span>{error}</span>
           </div>
+        ) : null}
+
+        {refreshJob ? (
+          <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">{describeRefreshJobSource(refreshJob)}</p>
+                <h2 className="mt-2 text-2xl font-bold tracking-tight text-slate-900">{describeRefreshJobStatus(refreshJob)}</h2>
+                <p className="mt-2 text-sm text-slate-500">{refreshJob.message || "正在同步任务进度"}</p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-4">
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-center">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">总房间</p>
+                  <p className="mt-2 text-2xl font-bold text-slate-900">{refreshJob.totalRooms}</p>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-center">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">已完成</p>
+                  <p className="mt-2 text-2xl font-bold text-slate-900">{refreshJob.completedRooms}</p>
+                </div>
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-center">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-600">成功</p>
+                  <p className="mt-2 text-2xl font-bold text-emerald-600">{refreshJob.successRooms}</p>
+                </div>
+                <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-center">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-rose-600">失败</p>
+                  <p className="mt-2 text-2xl font-bold text-rose-600">{refreshJob.failedRooms}</p>
+                </div>
+              </div>
+            </div>
+          </section>
         ) : null}
 
         <section className="overflow-hidden rounded-[28px] border border-sky-200 bg-gradient-to-r from-sky-50 via-white to-cyan-50 shadow-sm">

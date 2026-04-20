@@ -12,4 +12,7 @@ public final class RedisKeys {
     public static final String ALERT_SENT_SUFFIX = "alert-sent";
     public static final String SUMMARY_SENT_SUFFIX = "summary-sent";
     public static final String QUIET_PENDING_SUFFIX = "quiet-pending";
+    public static final String REFRESH_ACTIVE_JOB_KEY = "power:refresh:active";
+    public static final String REFRESH_MANUAL_QUEUE_KEY = "power:refresh:manual:queue";
+    public static final String REFRESH_RUNTIME_KEY_PREFIX = "power:refresh:job";
 }

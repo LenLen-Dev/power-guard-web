@@ -8,9 +8,17 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class MailConsumerProperties {
 
     private String queueKey;
+    private String retryQueueKey;
     private String deadLetterKey;
     private String senderCountKeyPrefix;
     private Integer maxDailySendCount;
     private Integer maxRetryCount;
-    private Long idleWaitMillis;
+    private Integer retryDelaySeconds;
+    private Integer listenerConcurrency;
+    private Integer shortPauseMinSeconds;
+    private Integer shortPauseMaxSeconds;
+    private Integer longPauseEveryAttempts;
+    private Integer longPauseMinSeconds;
+    private Integer longPauseMaxSeconds;
+    private Integer senderSwitchEveryAttempts;
 }

@@ -1,6 +1,27 @@
 import { useEffect, useState } from "react";
 import { roomApi } from "../lib/api";
-import type { CreateRoomPayload, RoomStatus, UpdateRoomPayload } from "../lib/types";
+import type { CreateRoomPayload, RefreshJob, RefreshJobStatus, RoomStatus, UpdateRoomPayload } from "../lib/types";
+
+const TERMINAL_REFRESH_JOB_STATUSES: RefreshJobStatus[] = ["SUCCESS", "PARTIAL_SUCCESS", "FAILED"];
+const LATEST_REFRESH_JOB_POLL_INTERVAL_MS = 5000;
+
+function isTerminalRefreshJob(status: RefreshJobStatus) {
+  return TERMINAL_REFRESH_JOB_STATUSES.includes(status);
+}
+
+function shouldReplaceTrackedRefreshJob(current: RefreshJob | null, candidate: RefreshJob | null) {
+  if (!candidate) {
+    return false;
+  }
+  if (!current) {
+    return true;
+  }
+  if (candidate.jobId === current.jobId) {
+    return false;
+  }
+
+  return new Date(candidate.queuedAt).getTime() >= new Date(current.queuedAt).getTime();
+}
 
 export function useRooms() {
   const [rooms, setRooms] = useState<RoomStatus[]>([]);
@@ -8,6 +29,7 @@ export function useRooms() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [manualRefreshing, setManualRefreshing] = useState(false);
+  const [refreshJob, setRefreshJob] = useState<RefreshJob | null>(null);
   const [refreshCooldownSeconds, setRefreshCooldownSeconds] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -62,6 +84,65 @@ export function useRooms() {
     return () => window.clearInterval(timer);
   }, [refreshCooldownSeconds]);
 
+  useEffect(() => {
+    if (!refreshJob || isTerminalRefreshJob(refreshJob.status)) {
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const nextJob = await roomApi.getRefreshJob(refreshJob.jobId);
+        if (cancelled) {
+          return;
+        }
+        setRefreshJob(nextJob);
+        if (isTerminalRefreshJob(nextJob.status)) {
+          await refreshRooms(selectedRoomId);
+        }
+      } catch (requestError) {
+        if (!cancelled) {
+          setError(requestError instanceof Error ? requestError.message : "获取刷新任务进度失败");
+        }
+      }
+    }, 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [refreshJob, selectedRoomId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const syncLatestRefreshJob = async () => {
+      try {
+        const latestJob = await roomApi.getLatestRefreshJob();
+        if (cancelled || !shouldReplaceTrackedRefreshJob(refreshJob, latestJob)) {
+          return;
+        }
+
+        setRefreshJob(latestJob);
+        if (latestJob && isTerminalRefreshJob(latestJob.status)) {
+          await refreshRooms(selectedRoomId);
+        }
+      } catch {
+        // Background sync of the latest refresh job should not interrupt the page.
+      }
+    };
+
+    void syncLatestRefreshJob();
+    const timer = window.setInterval(() => {
+      void syncLatestRefreshJob();
+    }, LATEST_REFRESH_JOB_POLL_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [refreshJob, selectedRoomId]);
+
   const createRoom = async (payload: CreateRoomPayload) => {
     setSubmitting(true);
     try {
@@ -96,14 +177,14 @@ export function useRooms() {
 
   const triggerManualRefresh = async (preferredRoomId?: number | null) => {
     if (manualRefreshing || refreshCooldownSeconds > 0) {
-      return rooms;
+      return refreshJob;
     }
     setManualRefreshing(true);
     setError(null);
     try {
-      const nextRooms = await roomApi.manualRefresh();
-      applyRooms(nextRooms, preferredRoomId);
-      return nextRooms;
+      const nextJob = await roomApi.manualRefresh();
+      setRefreshJob(nextJob);
+      return nextJob;
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "执行手动刷新失败");
       throw requestError;
@@ -120,6 +201,7 @@ export function useRooms() {
     loading,
     refreshing,
     manualRefreshing,
+    refreshJob,
     refreshCooldownSeconds,
     submitting,
     error,

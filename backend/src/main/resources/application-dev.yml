@@ -4,6 +4,11 @@ spring:
     username: power_guard
     password: power_guard
     driver-class-name: com.mysql.cj.jdbc.Driver
+#    url: jdbc:mysql://localhost/power_guard_local?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+#    username: root
+#    password: root
+#    driver-class-name: com.mysql.cj.jdbc.Driver
+
   data:
     redis:
       host: 122.51.138.179
@@ -25,6 +30,14 @@ spring:
           connectiontimeout: 5000
           timeout: 5000
           writetimeout: 5000
+  rabbitmq:
+    host: 122.51.138.179
+    port: 5672
+    username: rabbitmq
+    password: rabbitmq
+    listener:
+      simple:
+        default-requeue-rejected: false
 
 external-electricity:
   url: http://tysf.ahpu.edu.cn:8063/web/Common/Tsm.html

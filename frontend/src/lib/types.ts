@@ -29,6 +29,24 @@ export interface DailyTrend {
   dataComplete: boolean;
 }
 
+export type RefreshJobSource = "MANUAL" | "SCHEDULED";
+
+export type RefreshJobStatus = "QUEUED" | "RUNNING" | "SUCCESS" | "PARTIAL_SUCCESS" | "FAILED";
+
+export interface RefreshJob {
+  jobId: string;
+  source: RefreshJobSource;
+  status: RefreshJobStatus;
+  totalRooms: number;
+  completedRooms: number;
+  successRooms: number;
+  failedRooms: number;
+  queuedAt: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  message: string;
+}
+
 export interface CreateRoomPayload {
   buildingId: string;
   buildingName: string;

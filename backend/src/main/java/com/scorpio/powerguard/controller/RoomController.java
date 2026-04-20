@@ -6,6 +6,7 @@ import com.scorpio.powerguard.dto.RoomUpdateRequest;
 import com.scorpio.powerguard.service.ElectricityFetchService;
 import com.scorpio.powerguard.service.RoomService;
 import com.scorpio.powerguard.vo.DailyTrendVO;
+import com.scorpio.powerguard.vo.RefreshJobVO;
 import com.scorpio.powerguard.vo.RoomStatusVO;
 import jakarta.validation.Valid;
 import java.util.List;
@@ -47,9 +48,18 @@ public class RoomController {
     }
 
     @PostMapping("/refresh")
-    public ApiResponse<List<RoomStatusVO>> refreshRoomStatus() {
-        electricityFetchService.manualRefreshAllActiveRooms();
-        return ApiResponse.success("刷新成功", roomService.listRoomStatus());
+    public ApiResponse<RefreshJobVO> refreshRoomStatus() {
+        return ApiResponse.success("任务已提交", electricityFetchService.submitManualRefresh());
+    }
+
+    @GetMapping("/refresh/{jobId}")
+    public ApiResponse<RefreshJobVO> getRefreshJob(@PathVariable String jobId) {
+        return ApiResponse.success(electricityFetchService.getRefreshJob(jobId));
+    }
+
+    @GetMapping("/refresh/latest")
+    public ApiResponse<RefreshJobVO> getLatestRefreshJob() {
+        return ApiResponse.success(electricityFetchService.getLatestRefreshJob());
     }
 
     @GetMapping("/status")

@@ -15,6 +15,7 @@
   <img src="https://img.shields.io/badge/Language-Java%2017-f89820?style=for-the-badge&logo=openjdk&logoColor=ffffff" alt="Java 17" />
   <img src="https://img.shields.io/badge/Database-MySQL-4479a1?style=for-the-badge&logo=mysql&logoColor=ffffff" alt="MySQL" />
   <img src="https://img.shields.io/badge/Queue-Redis-dc382d?style=for-the-badge&logo=redis&logoColor=ffffff" alt="Redis" />
+  <img src="https://img.shields.io/badge/MQ-RabbitMQ-ff6600?style=for-the-badge&logo=rabbitmq&logoColor=ffffff" alt="RabbitMQ" />
 </p>
 
 <p>
@@ -121,6 +122,7 @@ Project
 - MyBatis
 - MySQL
 - Redis
+- RabbitMQ
 - JavaMailSender
 - Hutool
 
@@ -202,7 +204,8 @@ dist/
 | `POST` | `/api/rooms` | 新建房间 |
 | `PUT` | `/api/rooms/{id}` | 修改房间 |
 | `DELETE` | `/api/rooms/{id}` | 删除房间及全部历史数据 |
-| `POST` | `/api/rooms/refresh` | 手动刷新全部房间 |
+| `POST` | `/api/rooms/refresh` | 提交一次异步全量刷新任务 |
+| `GET` | `/api/rooms/refresh/{jobId}` | 查询刷新任务进度 |
 | `GET` | `/api/rooms/status` | 获取房间状态列表 |
 | `GET` | `/api/rooms/{id}/trend?days=7` | 获取房间趋势数据 |
 

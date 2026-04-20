@@ -58,11 +58,12 @@ mvn test
 
 ## API
 
-对外 API 保持不变：
+对外 API 如下：
 
 - `POST /api/rooms`
 - `PUT /api/rooms/{id}`
 - `DELETE /api/rooms/{id}`
 - `POST /api/rooms/refresh`
+- `GET /api/rooms/refresh/{jobId}`
 - `GET /api/rooms/status`
 - `GET /api/rooms/{id}/trend?days=7`

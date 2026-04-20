@@ -12,16 +12,33 @@ mybatis:
   type-aliases-package: com.scorpio.powerguard.entity
   configuration:
     map-underscore-to-camel-case: true
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
 
 logging:
   level:
     com.scorpio.powerguard: INFO
 
+refresh-job:
+  queue-key: power:refresh:room
+  dead-letter-queue-key: power:refresh:room:dead-letter
+  active-job-key: power:refresh:active
+  manual-queue-key: power:refresh:manual:queue
+  runtime-key-prefix: power:refresh:job
+  consumer-concurrency: 4
+  redis-ttl-hours: 24
+
 mail-consumer:
   queue-key: power:mail:queue
+  retry-queue-key: power:mail:retry
   dead-letter-key: power:mail:dead-letter
   sender-count-key-prefix: power:mail:sender:count
   max-daily-send-count: 100
   max-retry-count: 3
-  idle-wait-millis: 2000
+  retry-delay-seconds: 10
+  listener-concurrency: 1
+  short-pause-min-seconds: 1
+  short-pause-max-seconds: 3
+  long-pause-every-attempts: 10
+  long-pause-min-seconds: 30
+  long-pause-max-seconds: 60
+  sender-switch-every-attempts: 10

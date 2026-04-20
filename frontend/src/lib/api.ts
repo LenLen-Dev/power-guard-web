@@ -1,4 +1,4 @@
-import type { ApiResponse, CreateRoomPayload, DailyTrend, RoomStatus, UpdateRoomPayload } from "./types";
+import type { ApiResponse, CreateRoomPayload, DailyTrend, RefreshJob, RoomStatus, UpdateRoomPayload } from "./types";
 
 const API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL ?? "");
 
@@ -91,9 +91,11 @@ export const roomApi = {
       body: JSON.stringify(body)
     }),
   manualRefresh: () =>
-    request<RoomStatus[]>("/api/rooms/refresh", {
+    request<RefreshJob>("/api/rooms/refresh", {
       method: "POST"
     }),
+  getRefreshJob: (jobId: string) => request<RefreshJob>(`/api/rooms/refresh/${jobId}`),
+  getLatestRefreshJob: () => request<RefreshJob | null>("/api/rooms/refresh/latest"),
   update: (id: number, body: UpdateRoomPayload) =>
     request<RoomStatus>(`/api/rooms/${id}`, {
       method: "PUT",

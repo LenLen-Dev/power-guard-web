@@ -1,22 +1,17 @@
 package com.scorpio.powerguard.service.impl;
 
 import com.scorpio.powerguard.constant.RedisKeys;
-import com.scorpio.powerguard.entity.EmailSenderPool;
 import com.scorpio.powerguard.entity.Room;
 import com.scorpio.powerguard.enums.MailMessageType;
 import com.scorpio.powerguard.enums.RoomStatusEnum;
-import com.scorpio.powerguard.mapper.EmailSenderPoolMapper;
 import com.scorpio.powerguard.mapper.RoomMapper;
 import com.scorpio.powerguard.model.AlertMailMessage;
 import com.scorpio.powerguard.model.ExternalElectricityResult;
 import com.scorpio.powerguard.properties.ExternalElectricityProperties;
 import com.scorpio.powerguard.properties.MailConsumerProperties;
 import com.scorpio.powerguard.service.MailQueueService;
-import com.scorpio.powerguard.util.AlertMailTemplateBuilder;
 import com.scorpio.powerguard.util.JsonUtils;
 import com.scorpio.powerguard.util.RoomStatusCalculator;
-import jakarta.annotation.PreDestroy;
-import jakarta.mail.internet.MimeMessage;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDate;
@@ -25,28 +20,17 @@ import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
-import java.util.Properties;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.ApplicationArguments;
-import org.springframework.boot.ApplicationRunner;
-import org.springframework.data.redis.RedisConnectionFailureException;
-import org.springframework.data.redis.RedisSystemException;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.mail.javamail.JavaMailSenderImpl;
-import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class MailQueueServiceImpl implements MailQueueService, ApplicationRunner {
+public class MailQueueServiceImpl implements MailQueueService {
 
     private static final ZoneId MAIL_ZONE_ID = ZoneId.of("Asia/Shanghai");
     private static final Duration ROOM_MAIL_STATE_TTL = Duration.ofDays(2);
@@ -54,26 +38,10 @@ public class MailQueueServiceImpl implements MailQueueService, ApplicationRunner
     private static final DateTimeFormatter DATE_KEY_FORMATTER = DateTimeFormatter.BASIC_ISO_DATE;
 
     private final StringRedisTemplate stringRedisTemplate;
-    private final EmailSenderPoolMapper emailSenderPoolMapper;
+    private final RabbitTemplate rabbitTemplate;
     private final RoomMapper roomMapper;
     private final MailConsumerProperties mailConsumerProperties;
     private final ExternalElectricityProperties externalElectricityProperties;
-    private final AlertMailTemplateBuilder alertMailTemplateBuilder;
-    private final ConcurrentMap<String, JavaMailSenderImpl> senderCache = new ConcurrentHashMap<>();
-    private final AtomicBoolean running = new AtomicBoolean(false);
-    private final ExecutorService consumerExecutor = Executors.newSingleThreadExecutor(r -> {
-        Thread thread = new Thread(r, "mail-queue-consumer");
-        thread.setDaemon(true);
-        return thread;
-    });
-
-    @Override
-    public void run(ApplicationArguments args) {
-        if (running.compareAndSet(false, true)) {
-            consumerExecutor.submit(this::consumeLoop);
-            log.info("Mail queue consumer started");
-        }
-    }
 
     @Override
     public void enqueueLowBalanceAlert(Room room, ExternalElectricityResult result, LocalDateTime fetchTime) {
@@ -191,102 +159,6 @@ public class MailQueueServiceImpl implements MailQueueService, ApplicationRunner
         log.info("Cleared {} daily mail sender counter keys", deletedCount);
     }
 
-    /*
-     * Redis 队列消费逻辑说明：
-     * 1. 这里改为普通 RPOP + 短暂休眠，而不是 BRPOP 长阻塞。
-     *    原因是当前 Redis/代理环境会主动关闭阻塞连接，BRPOP 会周期性抛出 Connection closed。
-     * 2. 单实例下只启动一个消费者线程，避免同一进程重复发信。
-     * 3. 每个消息失败后会回推到队列尾部并累计 retryCount，超过阈值进入死信队列。
-     * 4. 发件账号选择先查数据库启用号池，再用 Redis 原子计数判断是否达到每日 100 封限制。
-     */
-    private void consumeLoop() {
-        while (running.get()) {
-            try {
-                String messageJson = stringRedisTemplate.opsForList()
-                    .rightPop(mailConsumerProperties.getQueueKey());
-                if (messageJson == null) {
-                    sleepQuietly(mailConsumerProperties.getIdleWaitMillis());
-                    continue;
-                }
-                handleMessage(messageJson);
-            } catch (RedisConnectionFailureException | RedisSystemException ex) {
-                log.warn("Redis queue poll failed, consumer will retry. cause={}", extractMessage(ex));
-                sleepQuietly(Math.max(mailConsumerProperties.getIdleWaitMillis(), 3000L));
-            } catch (Exception ex) {
-                log.error("Unexpected exception in mail queue consumer loop", ex);
-                sleepQuietly(Math.max(mailConsumerProperties.getIdleWaitMillis(), 1000L));
-            }
-        }
-    }
-
-    private void handleMessage(String messageJson) {
-        AlertMailMessage message;
-        try {
-            message = JsonUtils.fromJson(messageJson, AlertMailMessage.class);
-        } catch (Exception ex) {
-            log.error("Failed to deserialize alert mail payload={}", messageJson, ex);
-            stringRedisTemplate.opsForList().leftPush(mailConsumerProperties.getDeadLetterKey(), messageJson);
-            return;
-        }
-
-        try {
-            EmailSenderPool sender = pickAvailableSender();
-            sendMail(sender, message);
-            incrementSenderDailyCount(sender.getEmailAccount());
-            log.info("Mail sent successfully for room={}, target={}", message.getRoomName(), message.getTargetEmail());
-        } catch (Exception ex) {
-            log.error("Failed to consume alert mail payload={}", messageJson, ex);
-            retryOrDeadLetter(message);
-        }
-    }
-
-    private EmailSenderPool pickAvailableSender() {
-        List<EmailSenderPool> senders = emailSenderPoolMapper.selectEnabledSenders();
-        for (EmailSenderPool sender : senders) {
-            int sentCount = getSenderDailyCount(sender.getEmailAccount());
-            if (sentCount < mailConsumerProperties.getMaxDailySendCount()) {
-                return sender;
-            }
-        }
-        throw new IllegalStateException("当前没有可用的发件邮箱账号");
-    }
-
-    private void sendMail(EmailSenderPool sender, AlertMailMessage message) {
-        JavaMailSenderImpl mailSender = senderCache.computeIfAbsent(sender.getEmailAccount(),
-            key -> buildMailSender(sender));
-        String subject = alertMailTemplateBuilder.buildSubject(message);
-        String htmlContent = alertMailTemplateBuilder.buildHtmlContent(subject, message);
-        MimeMessage mimeMessage = mailSender.createMimeMessage();
-        try {
-            MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, false, "UTF-8");
-            helper.setFrom(sender.getEmailAccount());
-            helper.setTo(message.getTargetEmail());
-            helper.setSubject(subject);
-            helper.setText(htmlContent, true);
-        } catch (Exception ex) {
-            throw new IllegalStateException("构建告警邮件失败", ex);
-        }
-        mailSender.send(mimeMessage);
-    }
-
-    private JavaMailSenderImpl buildMailSender(EmailSenderPool sender) {
-        JavaMailSenderImpl mailSender = new JavaMailSenderImpl();
-        mailSender.setHost("smtp.qq.com");
-        mailSender.setPort(587);
-        mailSender.setUsername(sender.getEmailAccount());
-        mailSender.setPassword(sender.getAuthCode());
-        mailSender.setDefaultEncoding("UTF-8");
-
-        Properties properties = mailSender.getJavaMailProperties();
-        properties.put("mail.smtp.auth", "true");
-        properties.put("mail.smtp.starttls.enable", "true");
-        properties.put("mail.smtp.starttls.required", "true");
-        properties.put("mail.smtp.connectiontimeout", "5000");
-        properties.put("mail.smtp.timeout", "5000");
-        properties.put("mail.smtp.writetimeout", "5000");
-        return mailSender;
-    }
-
     private AlertMailMessage buildBaseMessage(Room room, LocalDateTime fetchTime, MailMessageType mailType) {
         AlertMailMessage message = new AlertMailMessage();
         message.setRoomId(room.getId());
@@ -304,39 +176,7 @@ public class MailQueueServiceImpl implements MailQueueService, ApplicationRunner
     }
 
     private void pushMessage(AlertMailMessage message) {
-        stringRedisTemplate.opsForList().leftPush(mailConsumerProperties.getQueueKey(), JsonUtils.toJson(message));
-    }
-
-    private void retryOrDeadLetter(AlertMailMessage message) {
-        int retryCount = message.getRetryCount() == null ? 0 : message.getRetryCount();
-        message.setRetryCount(retryCount + 1);
-        String payload = JsonUtils.toJson(message);
-        if (message.getRetryCount() > mailConsumerProperties.getMaxRetryCount()) {
-            stringRedisTemplate.opsForList().leftPush(mailConsumerProperties.getDeadLetterKey(), payload);
-            log.warn("Move alert mail to dead letter queue, room={}, target={}", message.getRoomName(), message.getTargetEmail());
-            return;
-        }
-        stringRedisTemplate.opsForList().rightPush(mailConsumerProperties.getQueueKey(), payload);
-    }
-
-    private int getSenderDailyCount(String emailAccount) {
-        String countValue = stringRedisTemplate.opsForValue().get(buildSenderCountKey(emailAccount));
-        return countValue == null ? 0 : Integer.parseInt(countValue);
-    }
-
-    private void incrementSenderDailyCount(String emailAccount) {
-        String countKey = buildSenderCountKey(emailAccount);
-        Long latestCount = stringRedisTemplate.opsForValue().increment(countKey);
-        stringRedisTemplate.expire(countKey, Duration.ofDays(2));
-        log.debug("Increment sender count, email={}, count={}", emailAccount, latestCount);
-    }
-
-    private String buildSenderCountKey(String emailAccount) {
-        return "%s:%s:%s".formatted(
-            mailConsumerProperties.getSenderCountKeyPrefix(),
-            LocalDate.now(MAIL_ZONE_ID).format(DATE_KEY_FORMATTER),
-            emailAccount
-        );
+        rabbitTemplate.convertAndSend(mailConsumerProperties.getQueueKey(), JsonUtils.toJson(message));
     }
 
     private boolean hasAlertEmail(Room room) {
@@ -403,27 +243,5 @@ public class MailQueueServiceImpl implements MailQueueService, ApplicationRunner
             return "夜间静默期内曾触发低电量提醒，当前仍低于阈值，现于 07:00 补发";
         }
         return "夜间静默期内曾触发低电量提醒，当前处于阈值附近，现于 07:00 补发";
-    }
-
-    private void sleepQuietly(long millis) {
-        try {
-            Thread.sleep(millis);
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
-        }
-    }
-
-    private String extractMessage(Exception ex) {
-        Throwable root = ex;
-        while (root.getCause() != null) {
-            root = root.getCause();
-        }
-        return root.getMessage();
-    }
-
-    @PreDestroy
-    public void shutdown() {
-        running.set(false);
-        consumerExecutor.shutdownNow();
     }
 }

@@ -1,8 +1,14 @@
 package com.scorpio.powerguard.service;
 
+import com.scorpio.powerguard.vo.RefreshJobVO;
+
 public interface ElectricityFetchService {
 
-    void fetchAllActiveRooms();
+    RefreshJobVO submitManualRefresh();
 
-    void manualRefreshAllActiveRooms();
+    void submitScheduledRefreshIfIdle();
+
+    RefreshJobVO getRefreshJob(String jobId);
+
+    RefreshJobVO getLatestRefreshJob();
 }

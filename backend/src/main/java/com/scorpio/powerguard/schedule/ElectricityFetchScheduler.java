@@ -16,6 +16,6 @@ public class ElectricityFetchScheduler {
     @Scheduled(cron = "0 0/30 * * * ?")
     public void fetchElectricity() {
         log.info("Trigger scheduled electricity fetch task");
-        electricityFetchService.fetchAllActiveRooms();
+        electricityFetchService.submitScheduledRefreshIfIdle();
     }
 }

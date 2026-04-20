@@ -10,13 +10,11 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.scorpio.powerguard.entity.Room;
-import com.scorpio.powerguard.mapper.EmailSenderPoolMapper;
 import com.scorpio.powerguard.mapper.RoomMapper;
 import com.scorpio.powerguard.model.ExternalElectricityResult;
 import com.scorpio.powerguard.properties.ExternalElectricityProperties;
 import com.scorpio.powerguard.properties.MailConsumerProperties;
 import com.scorpio.powerguard.service.impl.MailQueueServiceImpl;
-import com.scorpio.powerguard.util.AlertMailTemplateBuilder;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDate;
@@ -30,7 +28,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.redis.core.ListOperations;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
@@ -41,7 +39,7 @@ class MailQueueServiceImplTest {
     private StringRedisTemplate stringRedisTemplate;
 
     @Mock
-    private EmailSenderPoolMapper emailSenderPoolMapper;
+    private RabbitTemplate rabbitTemplate;
 
     @Mock
     private RoomMapper roomMapper;
@@ -49,34 +47,37 @@ class MailQueueServiceImplTest {
     @Mock
     private ValueOperations<String, String> valueOperations;
 
-    @Mock
-    private ListOperations<String, String> listOperations;
-
     private MailQueueServiceImpl mailQueueService;
 
     @BeforeEach
     void setUp() {
         MailConsumerProperties mailConsumerProperties = new MailConsumerProperties();
         mailConsumerProperties.setQueueKey("power:mail:queue");
+        mailConsumerProperties.setRetryQueueKey("power:mail:retry");
         mailConsumerProperties.setDeadLetterKey("power:mail:dead-letter");
         mailConsumerProperties.setSenderCountKeyPrefix("power:mail:sender:count");
         mailConsumerProperties.setMaxDailySendCount(100);
         mailConsumerProperties.setMaxRetryCount(3);
-        mailConsumerProperties.setIdleWaitMillis(1000L);
+        mailConsumerProperties.setRetryDelaySeconds(10);
+        mailConsumerProperties.setListenerConcurrency(1);
+        mailConsumerProperties.setShortPauseMinSeconds(1);
+        mailConsumerProperties.setShortPauseMaxSeconds(3);
+        mailConsumerProperties.setLongPauseEveryAttempts(10);
+        mailConsumerProperties.setLongPauseMinSeconds(30);
+        mailConsumerProperties.setLongPauseMaxSeconds(60);
+        mailConsumerProperties.setSenderSwitchEveryAttempts(10);
 
         ExternalElectricityProperties externalElectricityProperties = new ExternalElectricityProperties();
         externalElectricityProperties.setArea("安徽工程大学");
 
         lenient().when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
-        lenient().when(stringRedisTemplate.opsForList()).thenReturn(listOperations);
 
         mailQueueService = new MailQueueServiceImpl(
             stringRedisTemplate,
-            emailSenderPoolMapper,
+            rabbitTemplate,
             roomMapper,
             mailConsumerProperties,
-            externalElectricityProperties,
-            new AlertMailTemplateBuilder()
+            externalElectricityProperties
         );
     }
 
@@ -85,14 +86,14 @@ class MailQueueServiceImplTest {
         Room room = buildRoom();
         ExternalElectricityResult result = new ExternalElectricityResult();
         result.setAccount("54963");
-        result.setMessage("房间当当前剩余电量8");
+        result.setMessage("房间当前剩余电量8");
         String alertKey = "power:mail:room:1:20260416:alert-sent";
 
         when(valueOperations.setIfAbsent(alertKey, "1", Duration.ofDays(2))).thenReturn(true);
 
         mailQueueService.enqueueLowBalanceAlert(room, result, LocalDateTime.of(2026, 4, 16, 8, 0, 0));
 
-        verify(listOperations).leftPush(eq("power:mail:queue"), anyString());
+        verify(rabbitTemplate).convertAndSend(eq("power:mail:queue"), anyString());
         verify(valueOperations, never()).set(eq("power:mail:room:1:20260416:quiet-pending"), anyString(), any(Duration.class));
     }
 
@@ -105,7 +106,7 @@ class MailQueueServiceImplTest {
 
         mailQueueService.enqueueLowBalanceAlert(room, new ExternalElectricityResult(), LocalDateTime.of(2026, 4, 16, 8, 0, 0));
 
-        verify(listOperations, never()).leftPush(eq("power:mail:queue"), anyString());
+        verify(rabbitTemplate, never()).convertAndSend(eq("power:mail:queue"), anyString());
     }
 
     @Test
@@ -119,7 +120,7 @@ class MailQueueServiceImplTest {
         mailQueueService.enqueueLowBalanceAlert(room, new ExternalElectricityResult(), LocalDateTime.of(2026, 4, 16, 2, 0, 0));
 
         verify(valueOperations).set(quietKey, "1", Duration.ofDays(2));
-        verify(listOperations, never()).leftPush(eq("power:mail:queue"), anyString());
+        verify(rabbitTemplate, never()).convertAndSend(eq("power:mail:queue"), anyString());
     }
 
     @Test
@@ -132,7 +133,7 @@ class MailQueueServiceImplTest {
         mailQueueService.enqueueDailySummary(room, new BigDecimal("5"), LocalDateTime.of(2026, 4, 16, 22, 0, 0));
         mailQueueService.enqueueDailySummary(room, new BigDecimal("5"), LocalDateTime.of(2026, 4, 16, 22, 5, 0));
 
-        verify(listOperations).leftPush(eq("power:mail:queue"), anyString());
+        verify(rabbitTemplate).convertAndSend(eq("power:mail:queue"), anyString());
     }
 
     @Test
@@ -153,7 +154,7 @@ class MailQueueServiceImplTest {
         mailQueueService.processDeferredQuietAlerts();
 
         ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
-        verify(listOperations).leftPush(eq("power:mail:queue"), payloadCaptor.capture());
+        verify(rabbitTemplate).convertAndSend(eq("power:mail:queue"), payloadCaptor.capture());
         assertTrue(payloadCaptor.getValue().contains("\"mailType\":\"DEFERRED_ALERT\""));
         assertTrue(payloadCaptor.getValue().contains("\"status\":1"));
         verify(stringRedisTemplate).delete(quietKey);
@@ -175,7 +176,7 @@ class MailQueueServiceImplTest {
 
         mailQueueService.processDeferredQuietAlerts();
 
-        verify(listOperations, never()).leftPush(eq("power:mail:queue"), anyString());
+        verify(rabbitTemplate, never()).convertAndSend(eq("power:mail:queue"), anyString());
         verify(stringRedisTemplate).delete(quietKey);
     }
 
