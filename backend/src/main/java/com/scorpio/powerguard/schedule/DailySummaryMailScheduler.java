@@ -13,7 +13,7 @@ public class DailySummaryMailScheduler {
 
     private final DailySummaryMailService dailySummaryMailService;
 
-    @Scheduled(cron = "0 46 18 * * ?")
+    @Scheduled(cron = "59 59 23 * * ?")
     public void sendDailySummaries() {
         log.info("Trigger daily summary mail task");
         dailySummaryMailService.sendDailySummaries();

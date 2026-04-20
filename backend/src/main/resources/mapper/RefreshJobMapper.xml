@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.scorpio.powerguard.mapper.RefreshJobMapper">
+
+    <resultMap id="RefreshJobResultMap" type="com.scorpio.powerguard.entity.RefreshJob">
+        <id property="id" column="id"/>
+        <result property="jobId" column="job_id"/>
+        <result property="source" column="source"/>
+        <result property="status" column="status"/>
+        <result property="totalRooms" column="total_rooms"/>
+        <result property="completedRooms" column="completed_rooms"/>
+        <result property="successRooms" column="success_rooms"/>
+        <result property="failedRooms" column="failed_rooms"/>
+        <result property="queuedAt" column="queued_at"/>
+        <result property="startedAt" column="started_at"/>
+        <result property="finishedAt" column="finished_at"/>
+        <result property="message" column="message"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+
+    <sql id="BaseColumns">
+        id, job_id, source, status, total_rooms, completed_rooms, success_rooms,
+        failed_rooms, queued_at, started_at, finished_at, message, update_time
+    </sql>
+
+    <insert id="insert" parameterType="com.scorpio.powerguard.entity.RefreshJob" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO refresh_job (
+            job_id, source, status, total_rooms, completed_rooms, success_rooms,
+            failed_rooms, queued_at, started_at, finished_at, message, update_time
+        ) VALUES (
+            #{jobId}, #{source}, #{status}, #{totalRooms}, #{completedRooms}, #{successRooms},
+            #{failedRooms}, #{queuedAt}, #{startedAt}, #{finishedAt}, #{message}, #{updateTime}
+        )
+    </insert>
+
+    <select id="selectByJobId" resultMap="RefreshJobResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM refresh_job
+        WHERE job_id = #{jobId}
+        LIMIT 1
+    </select>
+
+    <select id="selectLatest" resultMap="RefreshJobResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM refresh_job
+        ORDER BY CASE status
+            WHEN 'RUNNING' THEN 0
+            WHEN 'QUEUED' THEN 1
+            ELSE 2
+        END ASC,
+        queued_at DESC
+        LIMIT 1
+    </select>
+
+    <select id="countByStatuses" resultType="int">
+        SELECT COUNT(1)
+        FROM refresh_job
+        WHERE status IN
+        <foreach collection="statuses" item="status" open="(" separator="," close=")">
+            #{status}
+        </foreach>
+    </select>
+
+    <update id="markRunning">
+        UPDATE refresh_job
+        SET status = 'RUNNING',
+            total_rooms = #{totalRooms},
+            started_at = #{startedAt},
+            message = #{message},
+            update_time = #{updateTime}
+        WHERE job_id = #{jobId}
+          AND status = 'QUEUED'
+    </update>
+
+    <update id="incrementProgress">
+        UPDATE refresh_job
+        SET completed_rooms = completed_rooms + #{completedIncrement},
+            success_rooms = success_rooms + #{successIncrement},
+            failed_rooms = failed_rooms + #{failedIncrement},
+            message = #{message},
+            update_time = #{updateTime}
+        WHERE job_id = #{jobId}
+    </update>
+
+    <update id="finishIfRunning">
+        UPDATE refresh_job
+        SET status = #{status},
+            finished_at = #{finishedAt},
+            message = #{message},
+            update_time = #{updateTime}
+        WHERE job_id = #{jobId}
+          AND status = 'RUNNING'
+    </update>
+
+    <update id="failIfPending">
+        UPDATE refresh_job
+        SET status = #{status},
+            finished_at = #{finishedAt},
+            message = #{message},
+            update_time = #{updateTime}
+        WHERE job_id = #{jobId}
+          AND status IN ('QUEUED', 'RUNNING')
+    </update>
+</mapper>

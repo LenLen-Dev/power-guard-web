@@ -1,16 +1,21 @@
-import { AlertTriangle, Trash2, Zap } from "lucide-react";
+import { AlertTriangle, Crown, Sparkles, Trash2, Zap } from "lucide-react";
 import { calculateProgress, formatNumber } from "../lib/format";
 import { getStatusMeta } from "../lib/status";
-import type { RoomStatus } from "../lib/types";
+import type { LotteryWinner, RoomStatus } from "../lib/types";
 
 interface RoomCardProps {
   room: RoomStatus;
+  lotteryWinner?: LotteryWinner | null;
   selected: boolean;
   onSelect: (roomId: number) => void;
   onDelete: (room: RoomStatus) => void;
 }
 
-export function RoomCard({ room, selected, onSelect, onDelete }: RoomCardProps) {
+function formatReward(value: number) {
+  return `${value.toFixed(value % 1 === 0 ? 0 : 1)} 元电费`;
+}
+
+export function RoomCard({ room, lotteryWinner, selected, onSelect, onDelete }: RoomCardProps) {
   const meta = getStatusMeta(room.status);
   const progress = calculateProgress(room.remain, room.total, room.threshold);
   const total = room.total && room.total > 0 ? room.total : Math.max((room.remain ?? 0) + (room.threshold ?? 0), 100);
@@ -54,9 +59,33 @@ export function RoomCard({ room, selected, onSelect, onDelete }: RoomCardProps) 
       }}
       className={`h-full rounded-[26px] border p-4 text-left transition hover:-translate-y-0.5 hover:shadow-[0_16px_28px_rgba(15,23,42,0.08)] ${
         selected ? "border-blue-500 bg-white shadow-[0_0_0_3px_rgba(37,99,235,0.12)]" : toneClass.card
-      } cursor-pointer`}
+      } ${lotteryWinner ? "winner-room-card" : ""} cursor-pointer`}
     >
       <div className="flex h-full flex-col gap-4">
+        {lotteryWinner ? (
+          <div className="relative overflow-hidden rounded-[22px] border border-amber-200/80 bg-white/90 px-4 py-3 shadow-sm">
+            <div className="absolute inset-y-0 right-0 w-24 bg-[radial-gradient(circle_at_center,_rgba(251,191,36,0.2),_transparent_70%)]" />
+            <div className="relative flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 text-amber-600">
+                  <Crown className="h-4 w-4 shrink-0" />
+                  <span className="text-xs font-black uppercase tracking-[0.18em]">本期中奖</span>
+                  <span className="rounded-full bg-amber-500 px-2 py-0.5 text-[11px] font-black text-white">
+                    NO.{lotteryWinner.winnerRank}
+                  </span>
+                </div>
+                <p className="mt-2 text-sm font-semibold text-slate-700">好运已经落到这间宿舍啦</p>
+              </div>
+              <div className="shrink-0 text-right">
+                <div className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-3 py-1 text-emerald-600">
+                  <Sparkles className="h-3.5 w-3.5" />
+                  <span className="text-xs font-black">{formatReward(lotteryWinner.rewardAmount)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         <div className="space-y-2">
           <div className="flex items-start justify-between gap-3">
             <div className="flex min-w-0 items-start gap-3">

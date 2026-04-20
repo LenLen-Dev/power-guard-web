@@ -65,3 +65,32 @@ CREATE TABLE IF NOT EXISTS refresh_job_item (
     UNIQUE KEY uk_refresh_job_item_job_room (job_id, room_id),
     KEY idx_refresh_job_item_job_status (job_id, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='电量刷新任务子项表';
+
+CREATE TABLE IF NOT EXISTS lottery_draw (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    draw_key VARCHAR(32) NOT NULL COMMENT '开奖标识，例如 20260501',
+    draw_time DATETIME NOT NULL COMMENT '开奖时间',
+    winner_count INT NOT NULL DEFAULT 0 COMMENT '中奖房间数',
+    message VARCHAR(255) DEFAULT NULL COMMENT '开奖摘要',
+    create_time DATETIME NOT NULL COMMENT '创建时间',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_lottery_draw_key (draw_key),
+    KEY idx_lottery_draw_time (draw_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='抽奖主表';
+
+CREATE TABLE IF NOT EXISTS lottery_draw_winner (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    draw_id BIGINT NOT NULL COMMENT '抽奖主表ID',
+    room_pk_id BIGINT NOT NULL COMMENT '房间主键ID',
+    winner_rank INT NOT NULL COMMENT '中奖序号',
+    building_id VARCHAR(64) NOT NULL COMMENT '楼栋ID',
+    building_name VARCHAR(128) NOT NULL COMMENT '楼栋名称',
+    room_id VARCHAR(64) NOT NULL COMMENT '房间号ID',
+    room_name VARCHAR(64) NOT NULL COMMENT '房间名称',
+    alert_email VARCHAR(128) DEFAULT NULL COMMENT '开奖时的告警邮箱',
+    reward_amount DECIMAL(10, 2) NOT NULL COMMENT '奖励金额',
+    create_time DATETIME NOT NULL COMMENT '创建时间',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_lottery_draw_room (draw_id, room_pk_id),
+    KEY idx_lottery_draw_winner_draw_rank (draw_id, winner_rank)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='抽奖中奖房间表';

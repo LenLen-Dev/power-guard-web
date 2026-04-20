@@ -47,6 +47,22 @@ export interface RefreshJob {
   message: string;
 }
 
+export interface LotteryWinner {
+  winnerRank: number;
+  buildingName: string;
+  roomId: string;
+  roomName: string;
+  rewardAmount: number;
+}
+
+export interface LotteryDraw {
+  drawKey: string;
+  drawTime: string;
+  winnerCount: number;
+  message: string;
+  winners: LotteryWinner[];
+}
+
 export interface CreateRoomPayload {
   buildingId: string;
   buildingName: string;

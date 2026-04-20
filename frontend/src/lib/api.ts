@@ -1,4 +1,4 @@
-import type { ApiResponse, CreateRoomPayload, DailyTrend, RefreshJob, RoomStatus, UpdateRoomPayload } from "./types";
+import type { ApiResponse, CreateRoomPayload, DailyTrend, LotteryDraw, RefreshJob, RoomStatus, UpdateRoomPayload } from "./types";
 
 const API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL ?? "");
 
@@ -106,4 +106,8 @@ export const roomApi = {
       method: "DELETE"
     }),
   trend: (id: number, days = 7) => request<DailyTrend[]>(`/api/rooms/${id}/trend?days=${days}`)
+};
+
+export const lotteryApi = {
+  getLatest: () => request<LotteryDraw | null>("/api/lottery/latest")
 };

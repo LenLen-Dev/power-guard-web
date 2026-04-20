@@ -1,10 +1,13 @@
 import { startTransition, useDeferredValue, useEffect, useState } from "react";
-import { AlertCircle, BatteryCharging, Clock3, House, Plus, RefreshCcw, Search, TriangleAlert, Zap } from "lucide-react";
+import { AlertCircle, BatteryCharging, CalendarDays, Clock3, Github, Gift, House, Plus, RefreshCcw, Search, TriangleAlert, Trophy, Zap } from "lucide-react";
+import { AnnouncementModal } from "./components/AnnouncementModal";
 import { ConfirmDialog } from "./components/ConfirmDialog";
+import { LotteryResultsDrawer } from "./components/LotteryResultsDrawer";
 import { RoomCard } from "./components/RoomCard";
 import { RoomDetailModal } from "./components/RoomDetailModal";
 import { RoomFormModal } from "./components/RoomFormModal";
 import { StatCard } from "./components/StatCard";
+import { useLottery } from "./hooks/useLottery";
 import { useRooms } from "./hooks/useRooms";
 import { ApiError } from "./lib/api";
 import { buildRoomName } from "./lib/buildings";
@@ -54,6 +57,21 @@ function getSecondsUntilNextScheduledFetch(now: Date) {
   return Math.max(0, Math.ceil((next.getTime() - now.getTime()) / 1000));
 }
 
+function getNextLotteryDrawTime(now: Date) {
+  const candidates = [
+    new Date(now.getFullYear(), now.getMonth(), 1, 12, 0, 0, 0),
+    new Date(now.getFullYear(), now.getMonth(), 15, 12, 0, 0, 0),
+    new Date(now.getFullYear(), now.getMonth() + 1, 1, 12, 0, 0, 0)
+  ];
+
+  return candidates.find((candidate) => candidate.getTime() >= now.getTime()) ?? candidates[candidates.length - 1];
+}
+
+function getSecondsUntilNextLotteryDraw(now: Date) {
+  const next = getNextLotteryDrawTime(now);
+  return Math.max(0, Math.ceil((next.getTime() - now.getTime()) / 1000));
+}
+
 function formatCountdown(totalSeconds: number) {
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -64,6 +82,21 @@ function formatCountdown(totalSeconds: number) {
   }
   return [minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":");
 }
+
+function formatLotteryDrawTime(date: Date) {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const weekday = date.toLocaleDateString("zh-CN", { weekday: "short" });
+  return `${month}月${day}日 ${weekday} 12:00`;
+}
+
+function buildLotteryWinnerKey(buildingName: string, roomId: string) {
+  return `${buildingName}::${roomId}`;
+}
+
+const ANNOUNCEMENT_SNOOZE_KEY = "powerguard:announcement:snooze-until";
+const ANNOUNCEMENT_SNOOZE_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
+const GITHUB_REPOSITORY_URL = "https://github.com/LenLen-Dev/power-guard-web.git";
 
 function App() {
   const {
@@ -86,14 +119,20 @@ function App() {
   const [deleteTarget, setDeleteTarget] = useState<RoomStatus | null>(null);
   const [search, setSearch] = useState("");
   const [notice, setNotice] = useState<NoticeState | null>(null);
+  const [announcementOpen, setAnnouncementOpen] = useState(false);
+  const [lotteryDrawerOpen, setLotteryDrawerOpen] = useState(false);
   const [scheduledRefreshSeconds, setScheduledRefreshSeconds] = useState(() => getSecondsUntilNextScheduledFetch(new Date()));
+  const [lotteryCountdownSeconds, setLotteryCountdownSeconds] = useState(() => getSecondsUntilNextLotteryDraw(new Date()));
   const [lastHandledRefreshJobId, setLastHandledRefreshJobId] = useState<string | null>(null);
 
   const deferredSearch = useDeferredValue(search);
   const selectedRoom = rooms.find((room) => room.id === selectedRoomId) ?? null;
   const { trend, loading: trendLoading, error: trendError } = useRoomTrend(selectedRoom?.id ?? null, 7);
+  const { latestDraw, loading: lotteryLoading, error: lotteryError } = useLottery();
   const nextScheduledFetchTime = getNextScheduledFetchTime(new Date());
   const scheduledRefreshLabel = formatCountdown(scheduledRefreshSeconds);
+  const nextLotteryDrawTime = getNextLotteryDrawTime(new Date());
+  const lotteryCountdownLabel = formatCountdown(lotteryCountdownSeconds);
 
   useEffect(() => {
     if (!notice) {
@@ -105,12 +144,25 @@ function App() {
 
   useEffect(() => {
     const updateCountdown = () => {
-      setScheduledRefreshSeconds(getSecondsUntilNextScheduledFetch(new Date()));
+      const now = new Date();
+      setScheduledRefreshSeconds(getSecondsUntilNextScheduledFetch(now));
+      setLotteryCountdownSeconds(getSecondsUntilNextLotteryDraw(now));
     };
 
     updateCountdown();
     const timer = window.setInterval(updateCountdown, 1000);
     return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const snoozeUntil = window.localStorage.getItem(ANNOUNCEMENT_SNOOZE_KEY);
+    if (snoozeUntil && Number(snoozeUntil) > Date.now()) {
+      return;
+    }
+    setAnnouncementOpen(true);
   }, []);
 
   useEffect(() => {
@@ -146,6 +198,9 @@ function App() {
   const alertRooms = rooms.filter((room) => room.status === 2).length;
   const warningRooms = rooms.filter((room) => room.status === 1).length;
   const totalRemain = rooms.reduce((sum, room) => sum + (room.remain ?? 0), 0);
+  const latestWinnerMap = new Map(
+    (latestDraw?.winners ?? []).map((winner) => [buildLotteryWinnerKey(winner.buildingName, winner.roomId), winner])
+  );
 
   const handleCreate = async (values: RoomFormValues) => {
     const roomName = buildRoomName(values.buildingName, values.roomId) || values.roomName.trim();
@@ -225,8 +280,42 @@ function App() {
     }
   };
 
+  const handleCloseAnnouncement = () => {
+    setAnnouncementOpen(false);
+  };
+
+  const handleDismissAnnouncementForWeek = () => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(
+        ANNOUNCEMENT_SNOOZE_KEY,
+        String(Date.now() + ANNOUNCEMENT_SNOOZE_DURATION_MS)
+      );
+    }
+    setAnnouncementOpen(false);
+  };
+
+  const handleOpenLotteryDrawer = () => {
+    setLotteryDrawerOpen(true);
+  };
+
+  const handleCloseLotteryDrawer = () => {
+    setLotteryDrawerOpen(false);
+  };
+
   return (
     <div className="min-h-screen bg-slate-50">
+      <AnnouncementModal
+        open={announcementOpen}
+        onClose={handleCloseAnnouncement}
+        onDismissForWeek={handleDismissAnnouncementForWeek}
+      />
+      <LotteryResultsDrawer
+        open={lotteryDrawerOpen}
+        draw={latestDraw}
+        loading={lotteryLoading}
+        error={lotteryError}
+        onClose={handleCloseLotteryDrawer}
+      />
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-[1320px] flex-col gap-4 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-4">
@@ -239,6 +328,15 @@ function App() {
           </div>
 
           <div className="flex flex-wrap gap-3">
+            <a
+              href={GITHUB_REPOSITORY_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="secondary-btn gap-2"
+            >
+              <Github className="h-4 w-4" />
+              GitHub 仓库
+            </a>
             <button
               type="button"
               className="secondary-btn gap-2"
@@ -317,31 +415,61 @@ function App() {
           </section>
         ) : null}
 
-        <section className="overflow-hidden rounded-[28px] border border-sky-200 bg-gradient-to-r from-sky-50 via-white to-cyan-50 shadow-sm">
-          <div className="flex flex-col gap-4 px-5 py-5 lg:flex-row lg:items-center lg:justify-between lg:px-6">
+        <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+          <article className="rounded-[26px] border border-sky-200 bg-[linear-gradient(135deg,_#f0f9ff,_#ffffff_60%,_#ecfeff)] p-5 shadow-sm">
             <div className="flex items-start gap-4">
-              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-sky-100 bg-white text-sky-600 shadow-sm">
-                <Clock3 className="h-7 w-7" />
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-sky-100 bg-white text-sky-600 shadow-sm">
+                <Clock3 className="h-5 w-5" />
               </div>
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-600">统一查询倒计时</p>
-                <h3 className="mt-2 text-2xl font-bold tracking-tight text-slate-900">
-                  距下次统一查询还有 <span className="text-sky-600">{scheduledRefreshLabel}</span>
-                </h3>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-600">统一查询</p>
+                <p className="mt-3 text-3xl font-black tracking-tight text-slate-900">{scheduledRefreshLabel}</p>
+                <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-white/85 px-3 py-1 text-sm text-slate-600 shadow-sm">
+                  <CalendarDays className="h-4 w-4 text-sky-500" />
+                  下次 {nextScheduledFetchTime.toLocaleTimeString("zh-CN", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    hour12: false
+                  })}
+                </div>
               </div>
             </div>
+          </article>
 
-            <div className="rounded-2xl border border-sky-200 bg-white px-5 py-4 text-center shadow-sm">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">下一次统一查询</p>
-              <p className="mt-2 text-3xl font-bold text-sky-600">
-                {nextScheduledFetchTime.toLocaleTimeString("zh-CN", {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                  hour12: false
-                })}
+          <article className="rounded-[26px] border border-amber-200 bg-[linear-gradient(135deg,_#fff7ed,_#ffffff_60%,_#fffbeb)] p-5 shadow-sm">
+            <div className="flex items-start gap-4">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-amber-100 bg-white text-amber-500 shadow-sm">
+                <Gift className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-500">抽奖开奖</p>
+                <p className="mt-3 text-3xl font-black tracking-tight text-slate-900">{lotteryCountdownLabel}</p>
+                <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-white/85 px-3 py-1 text-sm text-slate-600 shadow-sm">
+                  <CalendarDays className="h-4 w-4 text-amber-500" />
+                  {formatLotteryDrawTime(nextLotteryDrawTime)}
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <button
+            type="button"
+            className="flex min-h-[138px] flex-col items-start justify-between rounded-[26px] border border-amber-200 bg-white px-5 py-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-[0_16px_28px_rgba(15,23,42,0.08)] lg:min-w-[240px]"
+            onClick={handleOpenLotteryDrawer}
+          >
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-amber-100 bg-amber-50 text-amber-500 shadow-sm">
+              <Trophy className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-500">抽奖结果</p>
+              <h3 className="mt-3 text-xl font-black tracking-tight text-slate-900">查看中奖名单</h3>
+              <p className="mt-2 text-sm leading-6 text-slate-500">
+                {latestDraw
+                  ? `${formatLotteryDrawTime(new Date(latestDraw.drawTime))} · 共 ${latestDraw.winnerCount} 个名额`
+                  : "开奖后将在这里查看幸运宿舍"}
               </p>
             </div>
-          </div>
+          </button>
         </section>
 
         <section className="grid gap-4 md:grid-cols-2">
@@ -424,6 +552,7 @@ function App() {
                 <RoomCard
                   key={room.id}
                   room={room}
+                  lotteryWinner={latestWinnerMap.get(buildLotteryWinnerKey(room.buildingName, room.roomId)) ?? null}
                   selected={detailOpen && room.id === selectedRoomId}
                   onSelect={handleOpenDetail}
                   onDelete={setDeleteTarget}

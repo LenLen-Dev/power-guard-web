@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.scorpio.powerguard.mapper.LotteryDrawWinnerMapper">
+
+    <resultMap id="LotteryDrawWinnerResultMap" type="com.scorpio.powerguard.entity.LotteryDrawWinner">
+        <id property="id" column="id"/>
+        <result property="drawId" column="draw_id"/>
+        <result property="roomPkId" column="room_pk_id"/>
+        <result property="winnerRank" column="winner_rank"/>
+        <result property="buildingId" column="building_id"/>
+        <result property="buildingName" column="building_name"/>
+        <result property="roomId" column="room_id"/>
+        <result property="roomName" column="room_name"/>
+        <result property="alertEmail" column="alert_email"/>
+        <result property="rewardAmount" column="reward_amount"/>
+        <result property="createTime" column="create_time"/>
+    </resultMap>
+
+    <insert id="batchInsert">
+        INSERT INTO lottery_draw_winner (
+            draw_id, room_pk_id, winner_rank, building_id, building_name,
+            room_id, room_name, alert_email, reward_amount, create_time
+        ) VALUES
+        <foreach collection="winners" item="winner" separator=",">
+            (
+                #{winner.drawId}, #{winner.roomPkId}, #{winner.winnerRank}, #{winner.buildingId}, #{winner.buildingName},
+                #{winner.roomId}, #{winner.roomName}, #{winner.alertEmail}, #{winner.rewardAmount}, #{winner.createTime}
+            )
+        </foreach>
+    </insert>
+
+    <select id="selectByDrawId" resultMap="LotteryDrawWinnerResultMap">
+        SELECT id, draw_id, room_pk_id, winner_rank, building_id, building_name,
+               room_id, room_name, alert_email, reward_amount, create_time
+        FROM lottery_draw_winner
+        WHERE draw_id = #{drawId}
+        ORDER BY winner_rank ASC, id ASC
+    </select>
+</mapper>

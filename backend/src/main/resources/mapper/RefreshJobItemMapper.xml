@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.scorpio.powerguard.mapper.RefreshJobItemMapper">
+
+    <insert id="batchInsert">
+        INSERT INTO refresh_job_item (
+            job_id, room_id, status, error_message, created_at, started_at, finished_at
+        ) VALUES
+        <foreach collection="items" item="item" separator=",">
+            (
+                #{item.jobId}, #{item.roomId}, #{item.status}, #{item.errorMessage},
+                #{item.createdAt}, #{item.startedAt}, #{item.finishedAt}
+            )
+        </foreach>
+    </insert>
+
+    <update id="claimPending">
+        UPDATE refresh_job_item
+        SET status = #{status},
+            started_at = #{startedAt},
+            error_message = NULL
+        WHERE job_id = #{jobId}
+          AND room_id = #{roomId}
+          AND status = 'PENDING'
+    </update>
+
+    <update id="markSuccess">
+        UPDATE refresh_job_item
+        SET status = 'SUCCESS',
+            finished_at = #{finishedAt},
+            error_message = NULL
+        WHERE job_id = #{jobId}
+          AND room_id = #{roomId}
+          AND status = 'RUNNING'
+    </update>
+
+    <update id="markFailed">
+        UPDATE refresh_job_item
+        SET status = 'FAILED',
+            finished_at = #{finishedAt},
+            error_message = #{errorMessage}
+        WHERE job_id = #{jobId}
+          AND room_id = #{roomId}
+          AND status = 'RUNNING'
+    </update>
+</mapper>
