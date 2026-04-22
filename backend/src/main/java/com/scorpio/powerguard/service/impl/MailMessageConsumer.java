@@ -6,6 +6,7 @@ import com.scorpio.powerguard.properties.MailConsumerProperties;
 import com.scorpio.powerguard.mapper.EmailSenderPoolMapper;
 import com.scorpio.powerguard.util.AlertMailTemplateBuilder;
 import com.scorpio.powerguard.util.JsonUtils;
+import jakarta.mail.AuthenticationFailedException;
 import jakarta.mail.internet.MimeMessage;
 import java.time.Duration;
 import java.util.List;
@@ -19,6 +20,7 @@ import org.springframework.amqp.AmqpRejectAndDontRequeueException;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.mail.MailAuthenticationException;
 import org.springframework.mail.javamail.JavaMailSenderImpl;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Component;
@@ -52,7 +54,7 @@ public class MailMessageConsumer {
                 message.getRoomName(), message.getTargetEmail(), sender.getEmailAccount());
         } catch (Exception ex) {
             log.error("Failed to consume alert mail payload={}", payload, ex);
-            republishForRetryOrDeadLetter(message, ex);
+            handleConsumeFailure(message, sender, ex);
         } finally {
             pauseAfterAttempt(sender);
         }
@@ -133,7 +135,8 @@ public class MailMessageConsumer {
 
     private boolean isSenderAvailable(EmailSenderPool sender) {
         return sender != null && sender.getEmailAccount() != null
-            && getSenderDailyCount(sender.getEmailAccount()) < getMaxDailySendCount();
+            && getSenderDailyCount(sender.getEmailAccount()) < getMaxDailySendCount()
+            && !isSenderCoolingDown(sender.getEmailAccount());
     }
 
     void sendMail(EmailSenderPool sender, AlertMailMessage message) {
@@ -172,24 +175,56 @@ public class MailMessageConsumer {
         return mailSender;
     }
 
-    private void republishForRetryOrDeadLetter(AlertMailMessage message, Exception ex) {
+    private void handleConsumeFailure(AlertMailMessage message, EmailSenderPool sender, Exception ex) {
+        if (isNoAvailableSenderException(ex)) {
+            republishForRetryOrDeadLetter(message, ex, mailConsumerProperties.getAuthRetryQueueKey(), "auth-retry");
+            return;
+        }
+        if (isAuthenticationFailure(ex)) {
+            if (sender != null && sender.getEmailAccount() != null) {
+                markSenderCooldown(sender.getEmailAccount(), ex);
+            }
+            republishForRetryOrDeadLetter(message, ex, mailConsumerProperties.getAuthRetryQueueKey(), "auth-retry");
+            return;
+        }
+        if (isMailBuildFailure(ex)) {
+            republishToDeadLetter(message, ex, "invalid-message");
+            return;
+        }
+        republishForRetryOrDeadLetter(message, ex, mailConsumerProperties.getRetryQueueKey(), "retry");
+    }
+
+    private void republishForRetryOrDeadLetter(AlertMailMessage message, Exception ex, String retryQueueKey, String retryType) {
         int retryCount = message.getRetryCount() == null ? 0 : message.getRetryCount();
         message.setRetryCount(retryCount + 1);
         String payload = JsonUtils.toJson(message);
         String queueKey = message.getRetryCount() > getMaxRetryCount()
             ? mailConsumerProperties.getDeadLetterKey()
-            : mailConsumerProperties.getRetryQueueKey();
+            : retryQueueKey;
         try {
             rabbitTemplate.convertAndSend(queueKey, payload);
             if (queueKey.equals(mailConsumerProperties.getDeadLetterKey())) {
-                log.warn("Move alert mail to dead letter queue, room={}, target={}, reason={}",
-                    message.getRoomName(), message.getTargetEmail(), ex.getMessage());
+                log.warn("Move alert mail to dead letter queue, room={}, target={}, retryType={}, retryCount={}, reason={}",
+                    message.getRoomName(), message.getTargetEmail(), retryType, message.getRetryCount(), ex.getMessage());
             } else {
-                log.warn("Republish alert mail to retry queue, room={}, target={}, retryCount={}, reason={}",
-                    message.getRoomName(), message.getTargetEmail(), message.getRetryCount(), ex.getMessage());
+                log.warn("Republish alert mail to {} queue, room={}, target={}, retryCount={}, reason={}",
+                    retryType, message.getRoomName(), message.getTargetEmail(), message.getRetryCount(), ex.getMessage());
             }
         } catch (Exception publishEx) {
             throw new AmqpRejectAndDontRequeueException("failed to republish alert mail message", publishEx);
+        }
+    }
+
+    private void republishToDeadLetter(AlertMailMessage message, Exception ex, String reasonType) {
+        int retryCount = message.getRetryCount() == null ? 0 : message.getRetryCount();
+        message.setRetryCount(retryCount + 1);
+        String payload = JsonUtils.toJson(message);
+        try {
+            rabbitTemplate.convertAndSend(mailConsumerProperties.getDeadLetterKey(), payload);
+            log.warn("Move alert mail to dead letter queue, room={}, target={}, reasonType={}, reason={}",
+                message.getRoomName(), message.getTargetEmail(), reasonType, ex.getMessage());
+        } catch (Exception publishEx) {
+            throw new AmqpRejectAndDontRequeueException("failed to republish alert mail message to dead letter", publishEx);
         }
     }
 
@@ -251,8 +286,69 @@ public class MailMessageConsumer {
         );
     }
 
+    private boolean isSenderCoolingDown(String emailAccount) {
+        Boolean hasKey = stringRedisTemplate.hasKey(buildSenderCooldownKey(emailAccount));
+        return Boolean.TRUE.equals(hasKey);
+    }
+
+    private void markSenderCooldown(String emailAccount, Exception ex) {
+        String cooldownKey = buildSenderCooldownKey(emailAccount);
+        stringRedisTemplate.opsForValue().set(cooldownKey, sanitizeReason(ex), Duration.ofSeconds(getSenderCooldownSeconds()));
+        senderCache.remove(emailAccount);
+        synchronized (dispatchStateLock) {
+            if (emailAccount.equals(currentSenderEmailAccount)) {
+                currentSenderEmailAccount = null;
+                currentSenderAttemptCount = 0;
+            }
+        }
+        log.warn("Cooldown mail sender for {} seconds, email={}, reason={}",
+            getSenderCooldownSeconds(), emailAccount, ex.getMessage());
+    }
+
+    private String buildSenderCooldownKey(String emailAccount) {
+        return "%s:%s".formatted(getSenderCooldownKeyPrefix(), emailAccount);
+    }
+
+    private String sanitizeReason(Exception ex) {
+        String message = ex == null ? "" : ex.getMessage();
+        if (message == null || message.isBlank()) {
+            return "mail sender cooldown";
+        }
+        String normalized = message.replaceAll("\\s+", " ").trim();
+        return normalized.length() <= 255 ? normalized : normalized.substring(0, 255);
+    }
+
+    private boolean isNoAvailableSenderException(Exception ex) {
+        return ex instanceof IllegalStateException && ex.getMessage() != null && ex.getMessage().contains("当前没有可用的发件邮箱账号");
+    }
+
+    private boolean isAuthenticationFailure(Exception ex) {
+        Throwable current = ex;
+        while (current != null) {
+            if (current instanceof MailAuthenticationException || current instanceof AuthenticationFailedException) {
+                return true;
+            }
+            String message = current.getMessage();
+            if (message != null && (message.contains("535 Login fail") || message.contains("login frequency limited"))) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private boolean isMailBuildFailure(Exception ex) {
+        return ex instanceof IllegalStateException && ex.getMessage() != null && ex.getMessage().contains("构建告警邮件失败");
+    }
+
     private int getMaxRetryCount() {
         return mailConsumerProperties.getMaxRetryCount() == null ? 3 : mailConsumerProperties.getMaxRetryCount();
+    }
+
+    private String getSenderCooldownKeyPrefix() {
+        return mailConsumerProperties.getSenderCooldownKeyPrefix() == null
+            ? "power:mail:sender:cooldown"
+            : mailConsumerProperties.getSenderCooldownKeyPrefix();
     }
 
     private int getMaxDailySendCount() {
@@ -260,11 +356,11 @@ public class MailMessageConsumer {
     }
 
     private int getShortPauseMinSeconds() {
-        return mailConsumerProperties.getShortPauseMinSeconds() == null ? 1 : mailConsumerProperties.getShortPauseMinSeconds();
+        return mailConsumerProperties.getShortPauseMinSeconds() == null ? 10 : mailConsumerProperties.getShortPauseMinSeconds();
     }
 
     private int getShortPauseMaxSeconds() {
-        return mailConsumerProperties.getShortPauseMaxSeconds() == null ? 3 : mailConsumerProperties.getShortPauseMaxSeconds();
+        return mailConsumerProperties.getShortPauseMaxSeconds() == null ? 30 : mailConsumerProperties.getShortPauseMaxSeconds();
     }
 
     private int getLongPauseEveryAttempts() {
@@ -272,14 +368,18 @@ public class MailMessageConsumer {
     }
 
     private int getLongPauseMinSeconds() {
-        return mailConsumerProperties.getLongPauseMinSeconds() == null ? 30 : mailConsumerProperties.getLongPauseMinSeconds();
+        return mailConsumerProperties.getLongPauseMinSeconds() == null ? 600 : mailConsumerProperties.getLongPauseMinSeconds();
     }
 
     private int getLongPauseMaxSeconds() {
-        return mailConsumerProperties.getLongPauseMaxSeconds() == null ? 60 : mailConsumerProperties.getLongPauseMaxSeconds();
+        return mailConsumerProperties.getLongPauseMaxSeconds() == null ? 1800 : mailConsumerProperties.getLongPauseMaxSeconds();
     }
 
     private int getSenderSwitchEveryAttempts() {
         return mailConsumerProperties.getSenderSwitchEveryAttempts() == null ? 10 : mailConsumerProperties.getSenderSwitchEveryAttempts();
+    }
+
+    private int getSenderCooldownSeconds() {
+        return mailConsumerProperties.getSenderCooldownSeconds() == null ? 3600 : mailConsumerProperties.getSenderCooldownSeconds();
     }
 }

@@ -38,6 +38,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.mail.MailAuthenticationException;
 
 @ExtendWith(MockitoExtension.class)
 class MailMessageConsumerTest {
@@ -63,17 +64,21 @@ class MailMessageConsumerTest {
         properties = new MailConsumerProperties();
         properties.setQueueKey("power:mail:queue");
         properties.setRetryQueueKey("power:mail:retry");
+        properties.setAuthRetryQueueKey("power:mail:auth-retry");
         properties.setDeadLetterKey("power:mail:dead-letter");
         properties.setSenderCountKeyPrefix("power:mail:sender:count");
+        properties.setSenderCooldownKeyPrefix("power:mail:sender:cooldown");
         properties.setMaxDailySendCount(100);
         properties.setMaxRetryCount(3);
         properties.setRetryDelaySeconds(10);
+        properties.setAuthRetryDelaySeconds(3600);
+        properties.setSenderCooldownSeconds(3600);
         properties.setListenerConcurrency(1);
-        properties.setShortPauseMinSeconds(1);
-        properties.setShortPauseMaxSeconds(3);
+        properties.setShortPauseMinSeconds(10);
+        properties.setShortPauseMaxSeconds(30);
         properties.setLongPauseEveryAttempts(10);
-        properties.setLongPauseMinSeconds(30);
-        properties.setLongPauseMaxSeconds(60);
+        properties.setLongPauseMinSeconds(600);
+        properties.setLongPauseMaxSeconds(1800);
         properties.setSenderSwitchEveryAttempts(10);
 
         senderCounts = new HashMap<>();
@@ -156,7 +161,7 @@ class MailMessageConsumerTest {
 
         verify(consumer, times(0)).sendMail(any(EmailSenderPool.class), any(AlertMailMessage.class));
         ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
-        verify(rabbitTemplate).convertAndSend(eq("power:mail:retry"), payloadCaptor.capture());
+        verify(rabbitTemplate).convertAndSend(eq("power:mail:auth-retry"), payloadCaptor.capture());
         assertTrue(payloadCaptor.getValue().contains("\"retryCount\":1"));
     }
 
@@ -190,10 +195,65 @@ class MailMessageConsumerTest {
         List<Long> pauses = new ArrayList<>(sleepCaptor.getAllValues());
         for (int i = 0; i < 9; i++) {
             long pause = pauses.get(i);
-            assertTrue(pause >= 1000L && pause <= 3000L, "Expected short pause but got " + pause);
+            assertTrue(pause >= 10000L && pause <= 30000L, "Expected short pause but got " + pause);
         }
         long longPause = pauses.get(9);
-        assertTrue(longPause >= 30000L && longPause <= 60000L, "Expected long pause but got " + longPause);
+        assertTrue(longPause >= 600000L && longPause <= 1800000L, "Expected long pause but got " + longPause);
+    }
+
+    @Test
+    void shouldCooldownSenderAndUseAuthRetryQueueWhenAuthenticationFails() {
+        EmailSenderPool senderA = sender(1L, "a@example.com");
+        when(emailSenderPoolMapper.selectEnabledSenders()).thenReturn(List.of(senderA));
+        doThrow(new MailAuthenticationException("535 Login fail. login frequency limited"))
+            .when(consumer).sendMail(any(EmailSenderPool.class), any(AlertMailMessage.class));
+
+        consumer.consumeMessage(JsonUtils.toJson(buildMessage()));
+
+        verify(valueOperations).set(
+            eq("power:mail:sender:cooldown:a@example.com"),
+            anyString(),
+            eq(Duration.ofSeconds(3600))
+        );
+        ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+        verify(rabbitTemplate).convertAndSend(eq("power:mail:auth-retry"), payloadCaptor.capture());
+        assertTrue(payloadCaptor.getValue().contains("\"retryCount\":1"));
+    }
+
+    @Test
+    void shouldSkipCoolingSenderWhenPickingAvailableSender() {
+        EmailSenderPool senderA = sender(1L, "a@example.com");
+        EmailSenderPool senderB = sender(2L, "b@example.com");
+        when(emailSenderPoolMapper.selectEnabledSenders()).thenReturn(List.of(senderA, senderB));
+        when(stringRedisTemplate.hasKey("power:mail:sender:cooldown:a@example.com")).thenReturn(true);
+        doNothing().when(consumer).sendMail(any(EmailSenderPool.class), any(AlertMailMessage.class));
+
+        consumer.consumeMessage(JsonUtils.toJson(buildMessage()));
+
+        ArgumentCaptor<EmailSenderPool> senderCaptor = ArgumentCaptor.forClass(EmailSenderPool.class);
+        verify(consumer).sendMail(senderCaptor.capture(), any(AlertMailMessage.class));
+        assertEquals("b@example.com", senderCaptor.getValue().getEmailAccount());
+    }
+
+    @Test
+    void shouldMoveAuthenticationFailureToDeadLetterAfterMaxRetryExceeded() {
+        EmailSenderPool senderA = sender(1L, "a@example.com");
+        when(emailSenderPoolMapper.selectEnabledSenders()).thenReturn(List.of(senderA));
+        doThrow(new MailAuthenticationException("535 Login fail. login frequency limited"))
+            .when(consumer).sendMail(any(EmailSenderPool.class), any(AlertMailMessage.class));
+
+        AlertMailMessage message = buildMessage();
+        message.setRetryCount(3);
+        consumer.consumeMessage(JsonUtils.toJson(message));
+
+        verify(valueOperations).set(
+            eq("power:mail:sender:cooldown:a@example.com"),
+            anyString(),
+            eq(Duration.ofSeconds(3600))
+        );
+        ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+        verify(rabbitTemplate).convertAndSend(eq("power:mail:dead-letter"), payloadCaptor.capture());
+        assertTrue(payloadCaptor.getValue().contains("\"retryCount\":4"));
     }
 
     @Test

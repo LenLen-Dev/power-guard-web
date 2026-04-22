@@ -30,15 +30,19 @@ refresh-job:
 mail-consumer:
   queue-key: power:mail:queue
   retry-queue-key: power:mail:retry
+  auth-retry-queue-key: power:mail:auth-retry
   dead-letter-key: power:mail:dead-letter
   sender-count-key-prefix: power:mail:sender:count
+  sender-cooldown-key-prefix: power:mail:sender:cooldown
   max-daily-send-count: 100
   max-retry-count: 3
   retry-delay-seconds: 10
+  auth-retry-delay-seconds: 3600
+  sender-cooldown-seconds: 3600
   listener-concurrency: 1
-  short-pause-min-seconds: 1
-  short-pause-max-seconds: 3
+  short-pause-min-seconds: 10
+  short-pause-max-seconds: 30
   long-pause-every-attempts: 10
-  long-pause-min-seconds: 30
-  long-pause-max-seconds: 60
+  long-pause-min-seconds: 600
+  long-pause-max-seconds: 1800
   sender-switch-every-attempts: 10

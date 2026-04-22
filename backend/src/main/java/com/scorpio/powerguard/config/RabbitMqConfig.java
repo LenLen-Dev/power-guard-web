@@ -48,6 +48,19 @@ public class RabbitMqConfig {
     }
 
     @Bean
+    public Queue mailAuthRetryQueue() {
+        int authRetryDelaySeconds = mailConsumerProperties.getAuthRetryDelaySeconds() == null
+            ? 3600
+            : mailConsumerProperties.getAuthRetryDelaySeconds();
+        long authRetryDelayMillis = Math.max(1, authRetryDelaySeconds) * 1000L;
+        return QueueBuilder.durable(mailConsumerProperties.getAuthRetryQueueKey())
+            .withArgument("x-message-ttl", authRetryDelayMillis)
+            .withArgument("x-dead-letter-exchange", "")
+            .withArgument("x-dead-letter-routing-key", mailConsumerProperties.getQueueKey())
+            .build();
+    }
+
+    @Bean
     public Queue mailDeadLetterQueue() {
         return QueueBuilder.durable(mailConsumerProperties.getDeadLetterKey()).build();
     }
