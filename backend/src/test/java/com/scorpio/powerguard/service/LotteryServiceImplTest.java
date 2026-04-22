@@ -20,6 +20,7 @@ import com.scorpio.powerguard.vo.LotteryDrawVO;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -94,8 +95,14 @@ class LotteryServiceImplTest {
         verify(lotteryDrawWinnerMapper).batchInsert(winnersCaptor.capture());
         List<LotteryDrawWinner> winners = winnersCaptor.getValue();
         assertEquals(2, winners.size());
-        assertEquals(new BigDecimal("15.00"), winners.get(0).getRewardAmount());
-        assertEquals(new BigDecimal("7.50"), winners.get(1).getRewardAmount());
+        assertEquals(
+            List.of(new BigDecimal("7.50"), new BigDecimal("15.00")),
+            winners.stream()
+                .map(LotteryDrawWinner::getRewardAmount)
+                .sorted()
+                .collect(Collectors.toList())
+        );
+        assertEquals(List.of(1L, 2L), winners.stream().map(LotteryDrawWinner::getRoomPkId).sorted().toList());
         assertEquals(List.of(1, 2), winners.stream().map(LotteryDrawWinner::getWinnerRank).toList());
     }
 

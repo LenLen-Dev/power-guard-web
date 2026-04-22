@@ -19,6 +19,15 @@ body {
   min-height: 100vh;
 }
 
+.app-shell {
+  min-height: 100vh;
+  min-height: 100svh;
+}
+
+.volatile-panel {
+  overflow-anchor: none;
+}
+
 @layer components {
   .panel {
     @apply rounded-3xl border border-slate-200 bg-white shadow-sm;

@@ -1,6 +1,7 @@
-import { startTransition, useDeferredValue, useEffect, useState } from "react";
+import { startTransition, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { AlertCircle, BatteryCharging, CalendarDays, Clock3, Github, Gift, House, Plus, RefreshCcw, Search, TriangleAlert, Trophy, Zap } from "lucide-react";
 import { AnnouncementModal } from "./components/AnnouncementModal";
+import { BuildingFilterCombobox } from "./components/BuildingFilterCombobox";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { LotteryResultsDrawer } from "./components/LotteryResultsDrawer";
 import { RoomCard } from "./components/RoomCard";
@@ -10,7 +11,7 @@ import { StatCard } from "./components/StatCard";
 import { useLottery } from "./hooks/useLottery";
 import { useRooms } from "./hooks/useRooms";
 import { ApiError } from "./lib/api";
-import { buildRoomName } from "./lib/buildings";
+import { buildRoomName, type BuildingOption } from "./lib/buildings";
 import { useRoomTrend } from "./hooks/useRoomTrend";
 import { formatNumber } from "./lib/format";
 import type { NoticeState, RefreshJob, RoomEditorValues, RoomFormValues, RoomStatus } from "./lib/types";
@@ -94,6 +95,13 @@ function buildLotteryWinnerKey(buildingName: string, roomId: string) {
   return `${buildingName}::${roomId}`;
 }
 
+function shouldPauseLiveCountdowns() {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return false;
+  }
+  return window.matchMedia("(max-width: 767px)").matches && document.activeElement instanceof HTMLInputElement;
+}
+
 const ANNOUNCEMENT_SNOOZE_KEY = "powerguard:announcement:snooze-until";
 const ANNOUNCEMENT_SNOOZE_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
 const GITHUB_REPOSITORY_URL = "https://github.com/LenLen-Dev/power-guard-web.git";
@@ -118,6 +126,7 @@ function App() {
   const [detailOpen, setDetailOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<RoomStatus | null>(null);
   const [search, setSearch] = useState("");
+  const [selectedBuilding, setSelectedBuilding] = useState<BuildingOption | null>(null);
   const [notice, setNotice] = useState<NoticeState | null>(null);
   const [announcementOpen, setAnnouncementOpen] = useState(false);
   const [lotteryDrawerOpen, setLotteryDrawerOpen] = useState(false);
@@ -144,6 +153,9 @@ function App() {
 
   useEffect(() => {
     const updateCountdown = () => {
+      if (shouldPauseLiveCountdowns()) {
+        return;
+      }
       const now = new Date();
       setScheduledRefreshSeconds(getSecondsUntilNextScheduledFetch(now));
       setLotteryCountdownSeconds(getSecondsUntilNextLotteryDraw(now));
@@ -186,12 +198,35 @@ function App() {
     setLastHandledRefreshJobId(refreshJob.jobId);
   }, [lastHandledRefreshJobId, refreshJob]);
 
+  const buildingFilterOptions = useMemo(() => {
+    const optionMap = new Map<string, BuildingOption>();
+    for (const room of rooms) {
+      if (!room.buildingId || !room.buildingName) {
+        continue;
+      }
+      optionMap.set(room.buildingId, {
+        id: room.buildingId,
+        name: room.buildingName
+      });
+    }
+    return Array.from(optionMap.values()).sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
+  }, [rooms]);
+
+  useEffect(() => {
+    if (!selectedBuilding) {
+      return;
+    }
+    if (buildingFilterOptions.some((option) => option.id === selectedBuilding.id)) {
+      return;
+    }
+    setSelectedBuilding(null);
+  }, [buildingFilterOptions, selectedBuilding]);
+
   const filteredRooms = rooms.filter((room) => {
     const keyword = deferredSearch.trim().toLowerCase();
-    if (!keyword) {
-      return true;
-    }
-    return room.roomName.toLowerCase().includes(keyword);
+    const matchesKeyword = !keyword || room.roomName.toLowerCase().includes(keyword);
+    const matchesBuilding = !selectedBuilding || room.buildingId === selectedBuilding.id;
+    return matchesKeyword && matchesBuilding;
   });
 
   const totalRooms = rooms.length;
@@ -201,6 +236,20 @@ function App() {
   const latestWinnerMap = new Map(
     (latestDraw?.winners ?? []).map((winner) => [buildLotteryWinnerKey(winner.buildingName, winner.roomId), winner])
   );
+
+  const buildingFilterLabel = selectedBuilding?.name ?? "";
+
+  const totalSelectedBuildingRooms = selectedBuilding
+    ? rooms.filter((room) => room.buildingId === selectedBuilding.id).length
+    : null;
+
+  const roomOverviewHint = selectedBuilding
+    ? `当前楼栋共 ${totalSelectedBuildingRooms ?? 0} 个房间，已展示 ${filteredRooms.length} 个`
+    : "当前所有已接入系统的房间";
+
+  const handleBuildingFilterChange = (option: BuildingOption | null) => {
+    setSelectedBuilding(option);
+  };
 
   const handleCreate = async (values: RoomFormValues) => {
     const roomName = buildRoomName(values.buildingName, values.roomId) || values.roomName.trim();
@@ -303,7 +352,7 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="app-shell bg-slate-50">
       <AnnouncementModal
         open={announcementOpen}
         onClose={handleCloseAnnouncement}
@@ -386,7 +435,7 @@ function App() {
         ) : null}
 
         {refreshJob ? (
-          <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+          <section className="volatile-panel rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">{describeRefreshJobSource(refreshJob)}</p>
@@ -415,7 +464,7 @@ function App() {
           </section>
         ) : null}
 
-        <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+        <section className="volatile-panel grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
           <article className="rounded-[26px] border border-sky-200 bg-[linear-gradient(135deg,_#f0f9ff,_#ffffff_60%,_#ecfeff)] p-5 shadow-sm">
             <div className="flex items-start gap-4">
               <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-sky-100 bg-white text-sky-600 shadow-sm">
@@ -517,10 +566,10 @@ function App() {
           <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <h2 className="text-2xl font-bold tracking-tight text-slate-900">房间总览</h2>
-              
+              <p className="mt-2 text-sm text-slate-500">{roomOverviewHint}</p>
             </div>
 
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="grid gap-3 lg:grid-cols-[minmax(0,260px)_minmax(0,280px)_auto] lg:items-center">
               <label className="relative min-w-[260px]">
                 <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                 <input
@@ -535,6 +584,12 @@ function App() {
                   }
                 />
               </label>
+              <BuildingFilterCombobox
+                options={buildingFilterOptions}
+                valueId={selectedBuilding?.id ?? ""}
+                valueName={buildingFilterLabel}
+                onChange={handleBuildingFilterChange}
+              />
               <span className="pill justify-center">展示 {filteredRooms.length} / {rooms.length}</span>
             </div>
           </div>
