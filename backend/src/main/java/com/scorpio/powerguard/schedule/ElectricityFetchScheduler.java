@@ -13,7 +13,7 @@ public class ElectricityFetchScheduler {
 
     private final ElectricityFetchService electricityFetchService;
 
-    @Scheduled(cron = "0 0/30 * * * ?")
+    @Scheduled(cron = "0 0 */2 * * ?")
     public void fetchElectricity() {
         log.info("Trigger scheduled electricity fetch task");
         electricityFetchService.submitScheduledRefreshIfIdle();
